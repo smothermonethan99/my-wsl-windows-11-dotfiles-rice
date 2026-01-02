@@ -1,0 +1,486 @@
+#Requires -RunAsAdministrator
+<#
+.SYNOPSIS
+    Christian Lempa Windows Setup - Clean Version
+.DESCRIPTION
+    Installs Christian Lempa's programs, Ubuntu WSL, Starship with xcad theme
+#>
+
+$ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = 'SilentlyContinue'
+
+Clear-Host
+Write-Host "╔═══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║     Christian Lempa Windows Setup - xcad Theme           ║" -ForegroundColor Cyan
+Write-Host "╚═══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+# ============================================================================
+# INSTALL CHRISTIAN LEMPA'S PROGRAMS
+# ============================================================================
+Write-Host "==> Installing Christian Lempa's Programs" -ForegroundColor Cyan
+Write-Host ""
+
+$programs = @(
+    # Core Dev Tools
+    "Git.Git",
+    "GitHub.GitHubDesktop",
+    "Microsoft.VisualStudioCode",
+    "Microsoft.PowerShell",
+    "Microsoft.WindowsTerminal",
+    
+    # Infrastructure & DevOps
+    "Docker.DockerDesktop",
+    "Hashicorp.Terraform",
+    "Hashicorp.Packer",
+    "Helm.Helm",
+    "Kubernetes.kubectl",
+    
+    # Communication
+    "Google.Chrome",
+    "Discord.Discord",
+    "SlackTechnologies.Slack",
+    "Zoom.Zoom",
+    
+    # Productivity
+    "Notion.Notion",
+    "Notion.NotionCalendar",
+    "Spotify.Spotify",
+    
+    # Utilities
+    "7zip.7zip",
+    "OpenJS.NodeJS",
+    "Python.Python.3.13",
+    "Postman.Postman",
+    
+    # CLI Tools
+    "sharkdp.bat",
+    "ClementTsang.bottom",
+    "eza-community.eza",
+    "junegunn.fzf",
+    "ajeetdsouza.zoxide",
+    "BurntSushi.ripgrep.MSVC",
+    "sharkdp.fd",
+    "stedolan.jq",
+    "mikefarah.yq",
+    "Insecure.Nmap"
+)
+
+$success = 0
+foreach ($app in $programs) {
+    Write-Host "  Installing $app..." -ForegroundColor Yellow
+    
+    $job = Start-Job -ScriptBlock {
+        param($p)
+        winget install --id $p -e --accept-source-agreements --accept-package-agreements --silent 2>&1
+    } -ArgumentList $app
+    
+    $null = Wait-Job $job -Timeout 45
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+    $success++
+}
+
+Write-Host ""
+Write-Host "✓ $success programs processed" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================================
+# INSTALL HACK NERD FONT
+# ============================================================================
+Write-Host "==> Installing Hack Nerd Font" -ForegroundColor Cyan
+Write-Host ""
+
+try {
+    $fontUrl = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/Hack.zip"
+    $fontZip = "$env:TEMP\HackFont.zip"
+    $fontDir = "$env:TEMP\HackFont"
+    
+    Invoke-WebRequest -Uri $fontUrl -OutFile $fontZip -UseBasicParsing | Out-Null
+    Expand-Archive $fontZip -DestinationPath $fontDir -Force
+    
+    $fonts = Get-ChildItem "$fontDir\*.ttf" -Recurse
+    foreach ($font in $fonts) {
+        $dest = "C:\Windows\Fonts\$($font.Name)"
+        if (!(Test-Path $dest)) {
+            Copy-Item $font.FullName $dest -Force
+            $fontName = [System.IO.Path]::GetFileNameWithoutExtension($font.Name)
+            New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" `
+                -Name "$fontName (TrueType)" -Value $font.Name -Force | Out-Null
+        }
+    }
+    
+    Remove-Item $fontZip, $fontDir -Recurse -Force
+    Write-Host "✓ Hack Nerd Font installed" -ForegroundColor Green
+} catch {
+    Write-Host "⚠ Font installation failed" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# ============================================================================
+# INSTALL UBUNTU WSL
+# ============================================================================
+Write-Host "==> Installing Ubuntu WSL" -ForegroundColor Cyan
+Write-Host ""
+
+dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart /quiet | Out-Null
+dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart /quiet | Out-Null
+wsl --set-default-version 2 | Out-Null
+
+$hasUbuntu = wsl -l 2>&1 | Select-String "Ubuntu"
+if (!$hasUbuntu) {
+    Write-Host "Installing Ubuntu (window will open for setup)..." -ForegroundColor Yellow
+    Write-Host "→ Create username/password, then type 'exit'" -ForegroundColor Cyan
+    wsl --install Ubuntu
+    Write-Host "✓ Ubuntu installed" -ForegroundColor Green
+} else {
+    Write-Host "✓ Ubuntu already installed" -ForegroundColor Green
+}
+
+Write-Host ""
+
+# ============================================================================
+# INSTALL & CONFIGURE STARSHIP FOR POWERSHELL
+# ============================================================================
+Write-Host "==> Configuring Starship for PowerShell" -ForegroundColor Cyan
+Write-Host ""
+
+$job = Start-Job { winget install Starship.Starship -e --accept-source-agreements --accept-package-agreements --silent 2>&1 }
+Wait-Job $job -Timeout 30 | Out-Null
+Remove-Job $job -Force -ErrorAction SilentlyContinue
+
+$profileDir = Split-Path $PROFILE
+if (!(Test-Path $profileDir)) { New-Item -Type Directory $profileDir -Force | Out-Null }
+if (!(Test-Path $PROFILE)) { New-Item -Type File $PROFILE -Force | Out-Null }
+
+$init = 'Invoke-Expression (&starship init powershell)'
+$current = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+if (!$current -or !($current -match [regex]::Escape($init))) {
+    "`n$init" | Add-Content $PROFILE
+}
+
+$configDir = "$env:USERPROFILE\.config"
+if (!(Test-Path $configDir)) { New-Item -Type Directory $configDir -Force | Out-Null }
+
+$starshipToml = @'
+# ~/.config/starship.toml
+add_newline = false
+command_timeout = 1000
+format = """$os$username$hostname$kubernetes$directory$git_branch$git_status"""
+
+[character]
+success_symbol = ''
+error_symbol = ''
+
+[os]
+format = '[$symbol](bold white) '   
+disabled = false
+[os.symbols]
+Windows = ''
+Arch = '󰣇'
+Ubuntu = ''
+Macos = '󰀵'
+
+[username]
+style_user = 'white bold'
+style_root = 'black bold'
+format = '[$user]($style) '
+disabled = false
+show_always = true
+
+[hostname]
+ssh_only = false
+format = 'on [$hostname](bold yellow) '
+disabled = false
+
+[directory]
+truncation_length = 1
+truncation_symbol = '…/'
+home_symbol = '󰋜 ~'
+read_only_style = '197'
+read_only = '  '
+format = 'at [$path]($style)[$read_only]($read_only_style) '
+
+[git_branch]
+symbol = ' '
+format = 'via [$symbol$branch]($style)'
+truncation_symbol = '…/'
+style = 'bold green'
+
+[git_status]
+format = '[$all_status$ahead_behind]($style) '
+style = 'bold green'
+conflicted = '🏳'
+up_to_date = ''
+untracked = ' '
+ahead = '⇡${count}'
+diverged = '⇕⇡${ahead_count}⇣${behind_count}'
+behind = '⇣${count}'
+stashed = ' '
+modified = ' '
+staged = '[++\($count\)](green)'
+renamed = '襁 '
+deleted = ' '
+
+[kubernetes]
+format = 'via [󱃾 $context\($namespace\)](bold purple) '
+disabled = false
+
+[vagrant]
+disabled = true
+[docker_context]
+disabled = true
+[helm]
+disabled = true
+[python]
+disabled = true
+[nodejs]
+disabled = true
+[ruby]
+disabled = true
+[terraform]
+disabled = true
+'@
+
+[IO.File]::WriteAllText("$configDir\starship.toml", $starshipToml, [Text.UTF8Encoding]::new($false))
+
+Write-Host "✓ Starship configured for PowerShell" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================================
+# CONFIGURE STARSHIP FOR UBUNTU
+# ============================================================================
+Write-Host "==> Configuring Starship for Ubuntu" -ForegroundColor Cyan
+Write-Host ""
+
+$ubuntuScript = @'
+#!/bin/bash
+curl -sS https://starship.rs/install.sh | sh -s -- -y 2>/dev/null
+grep -q "starship init bash" ~/.bashrc || echo 'eval "$(starship init bash)"' >> ~/.bashrc
+mkdir -p ~/.config
+cat > ~/.config/starship.toml << 'EOF'
+add_newline = false
+command_timeout = 1000
+format = """$os$username$hostname$kubernetes$directory$git_branch$git_status"""
+[character]
+success_symbol = ''
+error_symbol = ''
+[os]
+format = '[$symbol](bold white) '   
+disabled = false
+[os.symbols]
+Windows = ''
+Arch = '󰣇'
+Ubuntu = ''
+Macos = '󰀵'
+[username]
+style_user = 'white bold'
+style_root = 'black bold'
+format = '[$user]($style) '
+disabled = false
+show_always = true
+[hostname]
+ssh_only = false
+format = 'on [$hostname](bold yellow) '
+disabled = false
+[directory]
+truncation_length = 1
+truncation_symbol = '…/'
+home_symbol = '󰋜 ~'
+read_only_style = '197'
+read_only = '  '
+format = 'at [$path]($style)[$read_only]($read_only_style) '
+[git_branch]
+symbol = ' '
+format = 'via [$symbol$branch]($style)'
+truncation_symbol = '…/'
+style = 'bold green'
+[git_status]
+format = '[$all_status$ahead_behind]($style) '
+style = 'bold green'
+conflicted = '🏳'
+up_to_date = ''
+untracked = ' '
+ahead = '⇡${count}'
+diverged = '⇕⇡${ahead_count}⇣${behind_count}'
+behind = '⇣${count}'
+stashed = ' '
+modified = ' '
+staged = '[++\($count\)](green)'
+renamed = '襁 '
+deleted = ' '
+[kubernetes]
+format = 'via [󱃾 $context\($namespace\)](bold purple) '
+disabled = false
+[vagrant]
+disabled = true
+[docker_context]
+disabled = true
+[helm]
+disabled = true
+[python]
+disabled = true
+[nodejs]
+disabled = true
+[ruby]
+disabled = true
+[terraform]
+disabled = true
+EOF
+'@
+
+$scriptPath = "$env:TEMP\ubuntu-setup.sh"
+$ubuntuScript | Out-File $scriptPath -Encoding UTF8 -NoNewline
+
+if (wsl -l 2>&1 | Select-String "Ubuntu") {
+    wsl -d Ubuntu bash -c "cat '$($scriptPath -replace '\\','/')' | bash" 2>&1 | Out-Null
+    Write-Host "✓ Starship configured for Ubuntu" -ForegroundColor Green
+} else {
+    Write-Host "⚠ Ubuntu not ready - configure after first launch" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# ============================================================================
+# CONFIGURE WINDOWS TERMINAL WITH XCAD_TDL THEME
+# ============================================================================
+Write-Host "==> Configuring Windows Terminal (xcad_tdl theme)" -ForegroundColor Cyan
+Write-Host ""
+
+$terminalPath = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+
+if (Test-Path $terminalPath) {
+    Copy-Item $terminalPath "$terminalPath.backup" -Force
+    
+    $terminalConfig = @'
+{
+    "$help": "https://aka.ms/terminal-documentation",
+    "$schema": "https://aka.ms/terminal-profiles-schema",
+    "actions": [],
+    "defaultProfile": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
+    "profiles": 
+    {
+        "defaults": 
+        {
+            "colorScheme": "xcad_tdl",
+            "cursorShape": "filledBox",
+            "font": 
+            {
+                "face": "Hack Nerd Font",
+                "size": 14
+            },
+            "historySize": 12000,
+            "intenseTextStyle": "bright",
+            "opacity": 95,
+            "padding": "8",
+            "scrollbarState": "visible",
+            "useAcrylic": false
+        },
+        "list": 
+        [
+            {
+                "commandline": "pwsh.exe --NoLogo",
+                "guid": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
+                "hidden": false,
+                "name": "PowerShell"
+            },
+            {
+                "guid": "{07b52e3e-de2c-5db4-bd2d-ba144ed6c273}",
+                "hidden": false,
+                "name": "Ubuntu",
+                "source": "Windows.Terminal.Wsl"
+            },
+            {
+                "commandline": "cmd.exe",
+                "guid": "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}",
+                "hidden": false,
+                "name": "Command Prompt"
+            }
+        ]
+    },
+    "schemes": 
+    [
+        {
+            "background": "#1A1A1A",
+            "black": "#121212",
+            "blue": "#2B4FFF",
+            "brightBlack": "#2F2F2F",
+            "brightBlue": "#5C78FF",
+            "brightCyan": "#5AC8FF",
+            "brightGreen": "#905AFF",
+            "brightPurple": "#5EA2FF",
+            "brightRed": "#BA5AFF",
+            "brightWhite": "#FFFFFF",
+            "brightYellow": "#685AFF",
+            "cursorColor": "#FFFFFF",
+            "cyan": "#28B9FF",
+            "foreground": "#F1F1F1",
+            "green": "#7129FF",
+            "name": "xcad_tdl",
+            "purple": "#2883FF",
+            "red": "#A52AFF",
+            "selectionBackground": "#FFFFFF",
+            "white": "#F1F1F1",
+            "yellow": "#3D2AFF"
+        }
+    ],
+    "showTabsInTitlebar": true,
+    "tabSwitcherMode": "inOrder",
+    "useAcrylicInTabRow": true
+}
+'@
+    
+    [IO.File]::WriteAllText($terminalPath, $terminalConfig, [Text.UTF8Encoding]::new($false))
+    Write-Host "✓ Windows Terminal configured with xcad_tdl theme" -ForegroundColor Green
+} else {
+    Write-Host "⚠ Windows Terminal not found" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# ============================================================================
+# DARK MODE & WALLPAPER
+# ============================================================================
+Write-Host "==> Configuring Dark Mode & Wallpaper" -ForegroundColor Cyan
+Write-Host ""
+
+try {
+    $wallpaper = "$env:USERPROFILE\Pictures\mr-robot-wallpaper.png"
+    Invoke-WebRequest "https://github.com/ChristianLempa/hackbox/raw/main/src/assets/mr-robot-wallpaper.png" -OutFile $wallpaper
+    Add-Type @"
+using System.Runtime.InteropServices;
+public class WP { [DllImport("user32.dll")] public static extern int SystemParametersInfo(int a, int b, string c, int d); }
+"@
+    [WP]::SystemParametersInfo(20, 0, $wallpaper, 3)
+} catch {}
+
+Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "AppsUseLightTheme" 0 -Force
+Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "SystemUsesLightTheme" 0 -Force
+Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarGlomLevel" 2 -Force
+Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowTaskViewButton" 0 -Force
+Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" "SearchboxTaskbarMode" 0 -Force
+
+Stop-Process -Name explorer -Force
+Start-Sleep 2
+
+Write-Host "✓ Dark mode enabled, wallpaper set" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================================
+# DONE
+# ============================================================================
+Write-Host "╔═══════════════════════════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "║  ✓ Setup Complete!                                        ║" -ForegroundColor Green
+Write-Host "║                                                           ║" -ForegroundColor Green
+Write-Host "║  • Christian Lempa's programs installed                   ║" -ForegroundColor Green
+Write-Host "║  • Hack Nerd Font installed                               ║" -ForegroundColor Green
+Write-Host "║  • Ubuntu WSL installed                                   ║" -ForegroundColor Green
+Write-Host "║  • Starship with xcad theme (PowerShell + Ubuntu)         ║" -ForegroundColor Green
+Write-Host "║  • Windows Terminal with xcad_tdl theme                   ║" -ForegroundColor Green
+Write-Host "║  • Dark mode & taskbar configured                         ║" -ForegroundColor Green
+Write-Host "║  • Mr. Robot wallpaper set                                ║" -ForegroundColor Green
+Write-Host "║                                                           ║" -ForegroundColor Green
+Write-Host "║  Restart PowerShell to see Starship! 🚀                   ║" -ForegroundColor Green
+Write-Host "╚═══════════════════════════════════════════════════════════╝" -ForegroundColor Green
+
+Start-Sleep 10
